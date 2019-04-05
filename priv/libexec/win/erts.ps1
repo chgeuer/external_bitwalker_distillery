@@ -3,13 +3,13 @@ function Get-Release-Apps {
     # This pattern extracts the current release resource definition
     # RELEASES can contain one or more such definitions
     $pattern = "{{release,[^,]*,`"{0}`",[^,]*,[^\]]*,[^po]*(permanent|old)}}" -f $vsn
-    $content = get-content -Raw -Path (join-path $Env:RELEASE_ROOT_DIR (join-path releases RELEASES))
-    $release = select-string -Pattern $pattern -InputObject $content -AllMatches | foreach { $_.Matches } | foreach { $_.Value }
+    $content = Get-Content -Raw -Path (join-path $Env:RELEASE_ROOT_DIR (join-path releases RELEASES))
+    $release = Select-String -Pattern $pattern -InputObject $content -AllMatches | ForEach-Object { $_.Matches } | foreach { $_.Value }
     # This extracts the list of applications from the release resource
-    $applications = select-string -Pattern "\[([^\]]*)\]" -InputObject $release -AllMatches | foreach { $_.Matches } | foreach { $_.Groups[1] } | foreach { $_.Value }
+    $applications = Select-String -Pattern "\[([^\]]*)\]" -InputObject $release -AllMatches | ForEach-Object { $_.Matches } | foreach { $_.Groups[1] } | foreach { $_.Value }
     # This extracts each application from the list and builds a dictionary for use by the caller
-    $libs = select-string -Pattern "{(?<app>[^,]*),`"(?<vsn>[^`"]*)`",`"[^`"]*`"}" -InputObject $applications -AllMatches | foreach { $_.Matches }
-    $libs | foreach { @{ "name" = $_.Groups["app"]; "vsn" = $_.Groups["vsn"] } }
+    $libs = Select-String -Pattern "{(?<app>[^,]*),`"(?<vsn>[^`"]*)`",`"[^`"]*`"}" -InputObject $applications -AllMatches | foreach { $_.Matches }
+    $libs | ForEach-Object { @{ "name" = $_.Groups["app"]; "vsn" = $_.Groups["vsn"] } }
 }
 
 function Format-Code-Path {
@@ -27,29 +27,30 @@ function Format-Code-Path {
 }
 
 function Get-Code-Paths {
-    get-release-apps | foreach { format-code-path -App $_ }
+    get-release-apps | ForEach-Object { format-code-path -App $_ }
 }
 
 # Echoes the path to the current ERTS binaries, e.g. erl
-function WhereIs-Erts-Bin() {
-    if (($Env:ERTS_VSN -eq $null) -or ($Env:ERTS_VSN -eq "")) {
-        get-command erl | select-object -ExpandProperty Definition
-    } elseif (($Env:USE_HOST_ERTS -eq $null) -or ($Env:USE_HOST_ERTS -eq "")) {
+function Get-ErtsBin {
+    if (($null -eq $Env:ERTS_VSN) -or ($Env:ERTS_VSN -eq "")) {
+        # Get-Command erl.exe | select-object -ExpandProperty Definition
+        $(Get-Command erl.exe | Select-Object -ExpandProperty Definition | Get-Item).Directory.FullName
+    } elseif (($null -eq $Env:USE_HOST_ERTS) -or ($Env:USE_HOST_ERTS -eq "")) {
         $erts_dir = (join-path $Env:RELEASE_ROOT_DIR ("erts-{0}" -f $Env:ERTS_VSN))
-        if (test-path $erts_dir -PathType Container) {
-            join-path $erts_dir bin
+        if (Test-Path $erts_dir -PathType Container) {
+            Join-Path $erts_dir bin
         } else {
             $Env:ERTS_DIR = ""
-            whereis-erts-bin
+            Get-ErtsBin
         }
     } else {
         $Env:ERTS_DIR = ""
-        whereis-erts-bin
+        Get-ErtsBin
     }
 }
 
-function Erl-Args {
-    $bin = whereis-erts-bin
+function Get-ErlArgs {
+    $bin = Get-ErtsBin
     # Set flag for whether a boot script was provided by the caller
     $boot_provided = $false
     if ($args | select-string -Pattern "-boot" -SimpleMatch -Quiet) {
@@ -59,7 +60,7 @@ function Erl-Args {
     $erts_included = $bin.StartsWith($Env:RELEASE_ROOT_DIR)
     $libs = (join-path $Env:RELEASE_ROOT_DIR lib)
     $config = @()
-    if ($Env:SYS_CONFIG_PATH -ne $null) {
+    if ($null -ne $Env:SYS_CONFIG_PATH) {
         $config = @("-config", $Env:SYS_CONFIG_PATH)
     }
     if ($erts_included -eq $true) {
@@ -70,10 +71,10 @@ function Erl-Args {
         $codepaths = @()
     }
     $extra_codepaths = @()
-    if ($Env:CONSOLIDATED_DIR -ne $null) {
+    if ($null -ne $Env:CONSOLIDATED_DIR) {
         $extra_codepaths += @("-pa", $Env:CONSOLIDATED_DIR)
     }
-    if ($Env:EXTRA_CODE_PATHS -ne $null) {
+    if ($null -ne $Env:EXTRA_CODE_PATHS) {
         $extra_codepaths += @("-pa", $Env:EXTRA_CODE_PATHS)
     }
     $base_args = @()
@@ -98,7 +99,7 @@ function Erl-Args {
         $base_args += $config
         $base_args += $codepaths
         $base_args += $extra_codepaths
-    } elseif ($Env:ERTS_LIB_DIR -eq $null) {
+    } elseif ($null -eq $Env:ERTS_LIB_DIR) {
         # Host ERTS, -boot set, no ERTS_LIB_DIR available
         $base_args += $config
         $base_args += $codepaths
@@ -114,23 +115,23 @@ function Erl-Args {
 }
 
 # Invokes erl with the provided arguments
-function erl {
-    $bin = whereis-erts-bin
-    if (($bin -eq $null) -or ($bin -eq "")) {
+function Run-Erl {
+    $bin = Get-ErtsBin
+    if (($null -eq $bin) -or ($bin -eq "")) {
         log-error "Erlang runtime not found. If Erlang is installed, ensure it is in your PATH"
     }
-    if (($IsWindows -eq $true) -or (($IsWindows -eq $null) -and ($env:OS -like "Windows*"))) {
-        $erl = (join-path $bin "erl.exe")
+    if (($IsWindows -eq $true) -or (($null -eq $IsWindows) -and ($env:OS -like "Windows*"))) {
+        $erl = (Join-Path $bin "erl.exe")
     } else {
-        $erl = (join-path $bin erl)
+        $erl = (Join-Path $bin "erl")
     }
-    $base_args = erl-args @args
+    $base_args = Get-ErlArgs @args
 
     & "$erl" @base_args @args
 }
 
 # Run Elixir
-function elixir {
+function Run-Elixir {
     if (($args.Length -eq 0) -or ($args[0] -eq "--help") -or ($args[0] -eq "-h")) {
         write-host @"
         Usage: elixir [options] [.exs file] [data]
@@ -246,37 +247,37 @@ function elixir {
             }
         }
     }
-    erl -noshell -s elixir start_cli @erl_opts -extra @ex_opts @extra_args
+    Run-Erl -noshell -s elixir start_cli @erl_opts -extra @ex_opts @extra_args
 }
 
 # Run IEx
 function iex {
-    $bin = whereis-erts-bin
-    if (($bin -eq $null) -or ($bin -eq "")) {
+    $bin = Get-ErtsBin
+    if (($null -eq $bin) -or ($bin -eq "")) {
         log-error "Erlang runtime not found. If Erlang is installed, ensure it is in your PATH"
     }
     $werl = (join-path $bin werl)
-    $base_args = erl-args
+    $base_args = Get-ErlArgs
     & $werl @base_args -user Elixir.IEx.CLI -extra --no-halt +iex @args
 }
 
 # Echoes the current ERTS version
 function Erts-vsn {
-    erl -noshell `
+    Run-Erl -noshell `
         -eval "Ver = erlang:system_info(version), io:format(`"~s~n`", [Ver])" `
         -s erlang halt
 }
 
 # Echoes the current ERTS root directory
 function Erts-Root {
-    erl -noshell `
+    Run-Erl -noshell `
         -eval "io:format(`"~s~n`", [code:root_dir()])." `
         -s erlang halt
 }
 
 # Echoes the current OTP version
 function Otp-Vsn {
-    erl -noshell `
+    Run-Erl -noshell `
         -eval "Ver = erlang:system_info(otp_release), io:format(`"~s~n`", [Ver])" `
         -s erlang halt
 }
@@ -284,7 +285,7 @@ function Otp-Vsn {
 # Use release_ctl for local operations
 # Use like `release_ctl eval "IO.puts(\"Hi!\")"`
 function Release-Ctl {
-    elixir -e "Mix.Releases.Runtime.Control.main" --logger-sasl-reports false "--" @args
+    Run-Elixir -e "Mix.Releases.Runtime.Control.main" --logger-sasl-reports false "--" @args
 }
 
 # Use release_ctl for remote operations
@@ -293,12 +294,12 @@ function Release-Remote-Ctl {
     require-cookie
 
     $name = $Env:PEERNAME
-    if ($name -eq $null) {
+    if ($null -eq $name) {
         $name = $Env:NAME
     }
     $cookie = $Env:COOKIE
     $command, $args = $args
-    elixir -e "Mix.Releases.Runtime.Control.main" `
+    Run-Elixir -e "Mix.Releases.Runtime.Control.main" `
            --logger-sasl-reports false `
            -- `
            $command `
@@ -311,13 +312,13 @@ function Release-Remote-Ctl {
 # Use like `escript "path/to/escript"`
 function Escript {
     $scriptpath, $args = $args
-    $bin = whereis-erts-bin
+    $bin = Get-ErtsBin
     $escript = (join-path $bin escript)
     & $escript (join-path $Env:ROOTDIR $scriptpath) @args
 }
 
 # Test erl to make sure it works, extract key info about runtime while doing so
-$output = erl -noshell -eval "io:format(\`"~s~n~s~n\`", [code:root_dir(), erlang:system_info(version)])." -s erlang halt
+$output = Run-Erl -noshell -eval "io:format(\`"~s~n~s~n\`", [code:root_dir(), erlang:system_info(version)])." -s erlang halt
 if (($LastExitCode -ne 0) -or (!$?)) {
     log-error "Unusable Erlang runtime system! This is likely due to being compiled for another system than the host is running"
 }
@@ -325,10 +326,10 @@ $rootdir, $erts_vsn = $output
 
 # Set up ERTS environment
 $Env:ROOTDIR = $rootdir
-if ($Env:ERTS_VSN -eq $null) {
+if ($null -eq $Env:ERTS_VSN) {
     # Update start_erl.data
     $Env:ERTS_VSN = $erts_vsn
-    set-content -Path $Env:START_ERL_DATA -InputObject ("{0} {1}" -f $erts_vsn,$Env:REL_VSN)
+    Set-Content -Path $Env:START_ERL_DATA -Value ("{0} {1}" -f $erts_vsn,$Env:REL_VSN)
 } else {
     $Env:ERTS_VSN = $erts_vsn
 }
